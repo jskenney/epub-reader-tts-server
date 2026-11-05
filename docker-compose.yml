@@ -1,0 +1,43 @@
+# Breeze TTS 2 voice server for the EPUB reader's "Server voice" (https://github.com/jskenney/epub-reader).
+#
+#   1. Download the model weights (about 7.3 GB, research / non-commercial licence):
+#        hf download BreezeBlue/Breeze-TTS-2 --local-dir models/Breeze-TTS-2
+#   2. Build and start (the first build compiles FlashAttention and takes a while):
+#        docker compose up -d --build
+#   3. Point your web server's /tts/ at http://<this host>:7860/ (see nginx.conf.example / Caddyfile.example)
+#      and create a voice with make-voice.sh.
+#
+# Needs the NVIDIA Container Toolkit. The API listens on port 7860 on all interfaces (0.0.0.0).
+services:
+  breeze-tts:
+    build:
+      # Upstream source, pinned to the commit this setup was written against.
+      context: https://github.com/breezeblue-ai/breeze-tts.git#daa6cb2efe5471f09369229f322d20bb956cb3c3
+      dockerfile: docker/Dockerfile
+      args:
+        # GPU architecture for FlashAttention: 120 = Blackwell workstation/consumer (RTX PRO 4000/6000
+        # Blackwell, RTX 50xx), 90 = H100, 89 = RTX 40xx / L4, 80 = A100.
+        FLASH_ATTN_CUDA_ARCHS: "120"
+    image: breeze-tts:sm120
+    command: ["python", "-m", "breeze_infer.api", "/models/breeze", "--host", "0.0.0.0", "--port", "7860",
+              # Precompiled CUDA graphs: faster generation, about 14.4 GiB of GPU memory, slower start-up.
+              # Remove this line to run eagerly (about 7.7 GiB).
+              "--fast-all"]
+    ports:
+      - "7860:7860"
+    volumes:
+      - ${BREEZE_MODEL_DIR:-./models/Breeze-TTS-2}:/models/breeze:ro
+    ipc: host
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7860/health"]   # inside the container
+      interval: 30s
+      timeout: 5s
+      start_period: 10m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

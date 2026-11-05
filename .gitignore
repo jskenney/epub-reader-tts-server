@@ -1,0 +1,4 @@
+# Model weights (about 7.3 GB) and generated voice clips (non-commercial model output)
+/models/
+tts-voices/
+*.pcm
