@@ -79,12 +79,14 @@ If the time is shorter than the seconds of audio, it keeps up.
 of prompt lengths and then frozen. Upstream's list (`configs/fast.json`) stops at 256 tokens for the
 reader's requests, and a long paragraph plus a voice's reference clip goes past it, failing with
 `backbone prefill CUDA graph (1, 288) was not declared in the warmup profile`. So the compose file mounts
-`fast-reader.json` in its place: the same profile with prefill lengths up to 1024 tokens and text-encoder
-lengths up to 512 at cfg 1.
+`fast-reader.json` in its place: upstream's profile with prefill lengths up to 512 tokens and text-encoder
+lengths up to 320 at cfg 1 (the reader's requests: a paragraph of up to ~600 characters plus a 5-15 s
+reference clip and its transcript come to roughly 350-400 tokens), and without the batch-4 text-encoder
+graphs, which only voice direction (reference clip plus instruction) uses.
 
-The extra graphs take more GPU memory and a longer start-up while they are captured. On a 24 GB card that
-should fit. If start-up runs out of memory, trim the longest entries from `fast-reader.json` (they must
-stay multiples of 32), then `docker compose up -d` again.
+Every extra graph costs GPU memory: going up to 1024 tokens ran a 24 GB card out of memory at start-up. If
+the reader ever sends a prompt longer than the list covers, that request fails and the reader retries the
+paragraph one sentence at a time.
 
 Running only the per-frame stages with graphs (`--fast-backbone-decode --fast-depth-decoder --fast-codec`)
 avoids the length limit with far less memory, but it was clearly slower on an RTX PRO 4000 Blackwell SFF,
