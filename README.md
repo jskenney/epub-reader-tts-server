@@ -75,13 +75,20 @@ If the time is shorter than the seconds of audio, it keeps up.
 
 ## Fast mode
 
-`docker-compose.yml` turns on CUDA graphs for the stages that run on every audio frame
-(`--fast-backbone-decode --fast-depth-decoder --fast-codec`), which is where the speed comes from. It does
-**not** use `--fast-all`: that also captures text-encoder and prefill graphs for a fixed list of prompt
-lengths (up to 256 tokens at cfg 1, from upstream's `configs/fast.json`) and freezes them, and a long
-paragraph plus the voice's reference clip goes past that, failing with
-`backbone prefill CUDA graph (1, 288) was not declared in the warmup profile`. Those two stages run once
-per request, so running them eagerly costs little.
+`docker-compose.yml` runs with `--fast-all`: every stage uses CUDA graphs, captured at start-up for a list
+of prompt lengths and then frozen. Upstream's list (`configs/fast.json`) stops at 256 tokens for the
+reader's requests, and a long paragraph plus a voice's reference clip goes past it, failing with
+`backbone prefill CUDA graph (1, 288) was not declared in the warmup profile`. So the compose file mounts
+`fast-reader.json` in its place: the same profile with prefill lengths up to 1024 tokens and text-encoder
+lengths up to 512 at cfg 1.
+
+The extra graphs take more GPU memory and a longer start-up while they are captured. On a 24 GB card that
+should fit. If start-up runs out of memory, trim the longest entries from `fast-reader.json` (they must
+stay multiples of 32), then `docker compose up -d` again.
+
+Running only the per-frame stages with graphs (`--fast-backbone-decode --fast-depth-decoder --fast-codec`)
+avoids the length limit with far less memory, but it was clearly slower on an RTX PRO 4000 Blackwell SFF,
+with pauses between paragraphs.
 
 ## How the reader uses it
 

@@ -20,16 +20,16 @@ services:
         FLASH_ATTN_CUDA_ARCHS: "120"
     image: breeze-tts:sm120
     command: ["python", "-m", "breeze_infer.api", "/models/breeze", "--host", "0.0.0.0", "--port", "7860",
-              # CUDA graphs for the stages that run on every audio frame (where the speed comes from).
-              # Not --fast-all: its text-encoder and prefill graphs are captured for a fixed list of prompt
-              # lengths (up to 256 tokens at cfg 1) and frozen, so a paragraph plus the voice's reference
-              # clip can exceed them ("backbone prefill CUDA graph (1, 288) was not declared in the warmup
-              # profile"). Those two stages run once per request, so they stay eager.
-              "--fast-backbone-decode", "--fast-depth-decoder", "--fast-codec"]
+              # CUDA graphs for every stage (fastest). Graphs are captured at start-up for the prompt
+              # lengths listed in fast-reader.json (mounted below over upstream's configs/fast.json, which
+              # stops at 256 tokens and fails on long paragraphs plus a reference clip).
+              "--fast-all"]
     ports:
       - "7860:7860"
     volumes:
       - ${BREEZE_MODEL_DIR:-./models/Breeze-TTS-2}:/models/breeze:ro
+      # Warmup profile with prompt lengths up to 1024 tokens (prefill) and 512 (text encoder) at cfg 1.
+      - ./fast-reader.json:/opt/breeze-infer/configs/fast.json:ro
     ipc: host
     restart: unless-stopped
     healthcheck:
