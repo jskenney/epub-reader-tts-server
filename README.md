@@ -14,8 +14,8 @@ commercial site.
 
 ## Requirements
 
-- Linux with an NVIDIA GPU with at least 12 GB of memory (24 GB for `--fast-all`), a recent driver, and
-  the NVIDIA Container Toolkit for Docker.
+- Linux with an NVIDIA GPU with at least 12 GB of memory (24 GB recommended), a recent driver, and the
+  NVIDIA Container Toolkit for Docker.
 - `docker-compose.yml` is set up for Blackwell workstation and consumer GPUs (RTX PRO 4000/6000 Blackwell,
   RTX 50xx: `FLASH_ATTN_CUDA_ARCHS=120`). The upstream image is PyTorch 2.9.1 with CUDA 12.8, which
   supports them. For other cards change that value (90 H100, 89 RTX 40xx, 80 A100).
@@ -71,8 +71,17 @@ time curl -s -X POST http://breeze-host:7860/v1/audio/speech \
 python3 -c "import os; print(os.path.getsize('/tmp/test.pcm') / 2 / 24000, 'seconds of audio')"
 ```
 
-If the time is shorter than the seconds of audio, it keeps up. `--fast-all` (on by default here) is the
-quicker mode; it needs more GPU memory and a longer start-up while it compiles.
+If the time is shorter than the seconds of audio, it keeps up.
+
+## Fast mode
+
+`docker-compose.yml` turns on CUDA graphs for the stages that run on every audio frame
+(`--fast-backbone-decode --fast-depth-decoder --fast-codec`), which is where the speed comes from. It does
+**not** use `--fast-all`: that also captures text-encoder and prefill graphs for a fixed list of prompt
+lengths (up to 256 tokens at cfg 1, from upstream's `configs/fast.json`) and freezes them, and a long
+paragraph plus the voice's reference clip goes past that, failing with
+`backbone prefill CUDA graph (1, 288) was not declared in the warmup profile`. Those two stages run once
+per request, so running them eagerly costs little.
 
 ## How the reader uses it
 

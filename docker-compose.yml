@@ -20,9 +20,12 @@ services:
         FLASH_ATTN_CUDA_ARCHS: "120"
     image: breeze-tts:sm120
     command: ["python", "-m", "breeze_infer.api", "/models/breeze", "--host", "0.0.0.0", "--port", "7860",
-              # Precompiled CUDA graphs: faster generation, about 14.4 GiB of GPU memory, slower start-up.
-              # Remove this line to run eagerly (about 7.7 GiB).
-              "--fast-all"]
+              # CUDA graphs for the stages that run on every audio frame (where the speed comes from).
+              # Not --fast-all: its text-encoder and prefill graphs are captured for a fixed list of prompt
+              # lengths (up to 256 tokens at cfg 1) and frozen, so a paragraph plus the voice's reference
+              # clip can exceed them ("backbone prefill CUDA graph (1, 288) was not declared in the warmup
+              # profile"). Those two stages run once per request, so they stay eager.
+              "--fast-backbone-decode", "--fast-depth-decoder", "--fast-codec"]
     ports:
       - "7860:7860"
     volumes:
