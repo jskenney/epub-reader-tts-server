@@ -4,8 +4,9 @@
 #        hf download BreezeBlue/Breeze-TTS-2 --local-dir models/Breeze-TTS-2
 #   2. Build and start (the first build compiles FlashAttention and takes a while):
 #        docker compose up -d --build
-#   3. Point your web server's /tts/ at http://<this host>:7860/ (see nginx.conf.example / Caddyfile.example)
-#      and create a voice with make-voice.sh.
+#   3. On your web server, proxy /tts/ to http://<this host>:7860/, /tts-voices/ to http://<this host>:7861/voices/
+#      and /tts-studio/ to http://<this host>:7861/ (see nginx.conf.example / Caddyfile.example).
+#   4. Open https://<your site>/tts-studio/ to try text and create voices.
 #
 # Needs the NVIDIA Container Toolkit. The API listens on port 7860 on all interfaces (0.0.0.0).
 services:
@@ -44,3 +45,25 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  # Voice studio: try text, design / record / upload voices, and manage them. It also serves the voices
+  # to the reader (the website proxies /tts-voices/ to its /voices/). Doesn't need the GPU.
+  studio:
+    build: ./studio
+    image: tts-studio
+    environment:
+      BREEZE_URL: http://breeze-tts:7860
+      # The path your web server serves the studio at. Set to "" to open it directly on port 7861.
+      STUDIO_ROOT_PATH: ${STUDIO_ROOT_PATH:-/tts-studio}
+    ports:
+      - "7861:7861"
+    volumes:
+      # The voices (voices.json and the reference clips), kept in ./tts-voices on this machine.
+      - ${TTS_VOICES_DIR:-./tts-voices}:/data/voices
+    depends_on:
+      - breeze-tts
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7861/health"]
+      interval: 30s
+      timeout: 5s

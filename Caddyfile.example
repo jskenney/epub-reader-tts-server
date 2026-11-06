@@ -1,17 +1,30 @@
-# Reader at https://example.com/reader/ with the voice API at /tts/ on the site root.
+# Reader at https://example.com/reader/; the TTS paths are on the site root. breeze-host is the machine
+# running docker-compose.yml. Make the password hash with:  caddy hash-password
 example.com {
-	# Ask for a password for the reader and its voice server, so others can't use your GPU.
-	# Make the hash with:  caddy hash-password
 	basic_auth /reader/* {
 		yourname $2a$14$REPLACE_WITH_THE_HASH
 	}
-	basic_auth /tts/* {
+	basic_auth /tts* {
 		yourname $2a$14$REPLACE_WITH_THE_HASH
 	}
 
+	# The Breeze TTS API.
 	handle_path /tts/* {
-		reverse_proxy breeze-host:7860 {   # your Breeze server
+		reverse_proxy breeze-host:7860 {
 			flush_interval -1   # stream audio as it is generated
+		}
+	}
+
+	# The voices the reader offers, served by the studio.
+	handle /tts-voices/* {
+		uri replace /tts-voices/ /voices/
+		reverse_proxy breeze-host:7861
+	}
+
+	# The voice studio (Caddy serves HTTPS, which microphone recording needs).
+	handle_path /tts-studio/* {
+		reverse_proxy breeze-host:7861 {
+			flush_interval -1
 		}
 	}
 

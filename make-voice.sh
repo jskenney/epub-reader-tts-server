@@ -7,11 +7,11 @@
 # Or use your own recording (clean speech, 5-15 s) with its exact transcript:
 #   ./make-voice.sh clip me "My voice" recording.wav "The exact words spoken in the recording."
 #
-# Voices are saved in VOICES_DIR, which must be the tts-voices/ folder next to the reader's index.html:
-# <id>.wav plus an entry in voices.json.
+# Voices are saved in VOICES_DIR, the voices folder the studio serves to the reader (./tts-voices next to
+# docker-compose.yml by default): <id>.wav plus an entry in voices.json. The studio does the same with a UI.
 # Every request then sends that clip and transcript, which keeps the voice the same across paragraphs.
 # Environment:
-#   VOICES_DIR   the reader's tts-voices/ folder (default ./tts-voices), for example /srv/www/reader/tts-voices
+#   VOICES_DIR   the voices folder (default ./tts-voices: run from the folder with docker-compose.yml)
 #   BREEZE_URL   the Breeze API, for example http://breeze-host:7860 (needed for "design")
 #   VOICE_SEED   default 42
 set -euo pipefail
