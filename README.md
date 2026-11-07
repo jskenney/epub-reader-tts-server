@@ -10,16 +10,22 @@ commercial site.
 
 ## What runs
 
-`docker-compose.yml` starts two services on the GPU machine:
+`docker-compose.yml` starts three services on the GPU machine:
 
 | Service | Port | What |
 |---|---|---|
 | `breeze-tts` | 7860 | The Breeze TTS 2 API (`/v1/audio/speech`). Needs the GPU. |
 | `studio` | 7861 | The voice studio (a Gradio app) and the voices folder at `/voices/`. No GPU. |
+| `asr` | (none) | Speech-to-text for the studio: English Whisper large-v3-turbo with word timings. Uses the GPU (about 2 GB) only while transcribing. Only the studio talks to it, so no port is published. |
 
-Voices (`voices.json` plus one reference clip per voice) are stored in **`./tts-voices`** next to
-`docker-compose.yml`, an ordinary folder bind-mounted into the studio, so they survive rebuilds and are
-easy to back up. Set `TTS_VOICES_DIR` to keep them elsewhere.
+These are ordinary folders next to `docker-compose.yml`, bind-mounted into the containers, so they survive
+rebuilds and are easy to back up:
+
+| Folder | What | Change with |
+|---|---|---|
+| `./tts-voices` | Voices: `voices.json` plus one reference clip per voice | `TTS_VOICES_DIR` |
+| `./tts-sources` | Long recordings uploaded in the studio, with their transcripts, until you delete them | `TTS_SOURCES_DIR` |
+| `./asr-models` | The speech-to-text model (about 1.6 GB, downloaded on the first transcription) | `ASR_MODELS_DIR` |
 
 Your web server proxies three paths on the reader's site to it:
 
@@ -50,6 +56,7 @@ docker compose up -d --build        # first build compiles FlashAttention: allow
 docker compose logs -f              # wait for "fast warmup" and the studio's "Uvicorn running"
 curl http://localhost:7860/health
 curl http://localhost:7861/health
+docker compose exec asr curl -s localhost:7862/health   # speech-to-text (not published on the host)
 ```
 
 Then add the three proxy paths on your web server: see `nginx.conf.example` or `Caddyfile.example`.
@@ -73,9 +80,42 @@ Open `https://<your site>/tts-studio/`.
 - **Record or upload:** record with the microphone or upload a file, trim it, type its exact transcript,
   test it on some text, and save it. Use 5-15 seconds of clean speech. Recording needs the studio to be
   opened over **HTTPS** (or on localhost); uploading works anywhere.
+- **From a long recording:** see below.
 - **Voices:** preview, rename, reorder (the order the reader lists them) and delete voices.
 
 Saved voices show up in the reader's voice list after reloading the reader page.
+
+### From a long recording
+
+For finding the best few seconds of your own voice in a long recording, such as an audiobook chapter you
+narrated or a podcast.
+
+1. **Upload** an audio file: MP3, M4A, M4B, WAV, FLAC or OGG (audio only; files with video are refused,
+   though an audiobook's cover picture is fine). It is converted to the mono 24 kHz WAV that voices use and
+   kept in `./tts-sources` until you delete it, so you can come back to it. M4B and other files with chapter
+   markers get a **Chapter** list for narrowing the transcript down.
+2. **Transcribe.** The `asr` service writes down every sentence with its timing, with a progress bar:
+   about a minute for 30 minutes of audio on the GPU. The first time it downloads the model (about
+   1.6 GB). The transcript is saved with the recording, so this happens once per file.
+3. **Click a sentence** to select it, then **Add sentence before / after** or **Drop first / last** to
+   grow or shrink the clip. Or type start and end times (or nudge them with the arrows); edges that fall
+   inside a word move to just outside it. The transcript box fills in with exactly the words in the clip;
+   correct it if the transcription misheard anything, since it must match what is said.
+4. **Clean-up** (applied to the clip): even out loudness and fade the edges (both on by default), shorten
+   pauses longer than 0.6 s, reduce background noise.
+5. **Test this clip** speaks the test text with that clip. Every test is added to **Candidates**, with
+   the same text and seed, so differences come from the clip; click one to load it back.
+6. **Save the selected clip as a voice** when one sounds right. The voice remembers which file and times
+   it came from.
+
+The clip's length is shown as you go: 5-15 s is best, up to 20 s is allowed. A clip and its transcript
+share the server's prompt with every paragraph the reader sends (see Fast mode), so longer clips make long
+paragraphs fail. Without the `asr` service you can still choose a clip by its times and type the
+transcript. **Delete this recording** (under the transcript) removes the upload and its transcript;
+voices saved from it are kept.
+
+The proxy has to accept large uploads: `nginx.conf.example` allows 1 GB on `/tts-studio/` (nginx's default
+is 1 MB). Caddy has no limit.
 
 These are all the parameters Breeze's API takes: the text, an `instruction` (description), `cfg_scale`,
 `seed`, and a reference clip with its transcript. It has no temperature or speed settings; the reader
@@ -148,6 +188,8 @@ with pauses between paragraphs.
 | `docker-compose.yml` | Builds Breeze TTS from upstream (pinned commit) for Blackwell GPUs and the voice studio |
 | `fast-reader.json` | Warmup profile sized for the reader's prompts (mounted over upstream's) |
 | `studio/` | The voice studio: `app.py` (Gradio 6.30), `Dockerfile`, `requirements.txt` |
+| `asr/` | Speech-to-text for the studio: `server.py` (Whisper through transformers, on the same PyTorch 2.9.1 / CUDA 12.8 base as Breeze), `Dockerfile`, `requirements.txt` |
 | `nginx.conf.example`, `Caddyfile.example` | Proxy `/tts/`, `/tts-voices/` and `/tts-studio/` on the reader's site |
 | `make-voice.sh` | Creates voices from the command line |
 | `tts-voices/` | Your voices (created on first run; git-ignored) |
+| `tts-sources/`, `asr-models/` | Uploaded long recordings and the speech-to-text model (created on first use; git-ignored) |

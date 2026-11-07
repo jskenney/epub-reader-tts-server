@@ -1,4 +1,7 @@
 # Model weights (about 7.3 GB) and generated voice clips (non-commercial model output)
 /models/
 tts-voices/
+# Uploaded long recordings and the speech-to-text model cache
+tts-sources/
+asr-models/
 *.pcm

@@ -6,7 +6,8 @@
 #        docker compose up -d --build
 #   3. On your web server, proxy /tts/ to http://<this host>:7860/, /tts-voices/ to http://<this host>:7861/voices/
 #      and /tts-studio/ to http://<this host>:7861/ (see nginx.conf.example / Caddyfile.example).
-#   4. Open https://<your site>/tts-studio/ to try text and create voices.
+#   4. Open https://<your site>/tts-studio/ to try text and create voices, including picking a clip out of a
+#      long recording (the asr service transcribes it; its model downloads on first use, about 1.6 GB).
 #
 # Needs the NVIDIA Container Toolkit. The API listens on port 7860 on all interfaces (0.0.0.0).
 services:
@@ -46,13 +47,15 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Voice studio: try text, design / record / upload voices, and manage them. It also serves the voices
-  # to the reader (the website proxies /tts-voices/ to its /voices/). Doesn't need the GPU.
+  # Voice studio: try text, design / record / upload voices, pick clips from long recordings, and manage
+  # voices. It also serves the voices to the reader (the website proxies /tts-voices/ to its /voices/).
+  # Doesn't need the GPU.
   studio:
     build: ./studio
     image: tts-studio
     environment:
       BREEZE_URL: http://breeze-tts:7860
+      ASR_URL: http://asr:7862
       # The path your web server serves the studio at. Set to "" to open it directly on port 7861.
       STUDIO_ROOT_PATH: ${STUDIO_ROOT_PATH:-/tts-studio}
     ports:
@@ -60,10 +63,39 @@ services:
     volumes:
       # The voices (voices.json and the reference clips), kept in ./tts-voices on this machine.
       - ${TTS_VOICES_DIR:-./tts-voices}:/data/voices
+      # Long recordings uploaded to pick voice clips from (with their transcripts), kept until you delete
+      # them in the studio.
+      - ${TTS_SOURCES_DIR:-./tts-sources}:/data/sources
     depends_on:
       - breeze-tts
+      - asr
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:7861/health"]
       interval: 30s
       timeout: 5s
+
+  # Speech-to-text for the studio's "From a long recording" tab: English Whisper (large-v3-turbo) with word
+  # timestamps. Loads the model (about 2 GB of GPU memory) on the first transcription and frees it after 10
+  # idle minutes. Only the studio talks to it, so no port is published.
+  asr:
+    build: ./asr
+    image: tts-asr
+    environment:
+      ASR_MODEL: ${ASR_MODEL:-openai/whisper-large-v3-turbo}
+      ASR_IDLE_UNLOAD: "600"
+    volumes:
+      # Downloaded models (about 1.6 GB for large-v3-turbo), kept between restarts.
+      - ${ASR_MODELS_DIR:-./asr-models}:/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7862/health"]
+      interval: 30s
+      timeout: 5s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

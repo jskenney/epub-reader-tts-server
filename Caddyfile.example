@@ -21,7 +21,8 @@ example.com {
 		reverse_proxy breeze-host:7861
 	}
 
-	# The voice studio (Caddy serves HTTPS, which microphone recording needs).
+	# The voice studio (Caddy serves HTTPS, which microphone recording needs). Caddy doesn't limit upload
+	# sizes, so long recordings upload as they are.
 	handle_path /tts-studio/* {
 		reverse_proxy breeze-host:7861 {
 			flush_interval -1

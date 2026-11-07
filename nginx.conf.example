@@ -39,5 +39,5 @@ location /tts-studio/ {
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_buffering off;                   # the studio streams progress and results
     proxy_read_timeout 600s;
-    client_max_body_size 50m;              # uploaded recordings
+    client_max_body_size 1g;               # uploaded recordings (a whole audiobook can be several hundred MB)
 }
