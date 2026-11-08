@@ -181,6 +181,38 @@ with pauses between paragraphs.
 - Speed is applied at playback with pitch preserved. The highlighted word is estimated, as with the other
   natural voices.
 
+## Settings
+
+Everything below has a working default. Set the `docker-compose.yml` values in a `.env` file next to it
+(one `NAME=value` per line) or in the shell, then run `docker compose up -d` again.
+
+**In `docker-compose.yml`**
+
+| Variable | Default | What it does / when to change it |
+|---|---|---|
+| `BREEZE_MODEL_DIR` | `./models/Breeze-TTS-2` | Where the Breeze weights are (mounted read-only). Set it if you keep them on another disk. |
+| `TTS_VOICES_DIR` | `./tts-voices` | The voices: `voices.json` and the reference clips. |
+| `TTS_SOURCES_DIR` | `./tts-sources` | Long recordings uploaded in the studio, with their transcripts. |
+| `ASR_MODELS_DIR` | `./asr-models` | The downloaded speech-to-text model. |
+| `STUDIO_ROOT_PATH` | `/tts-studio` | The path your web server serves the studio at. Set it to empty (`STUDIO_ROOT_PATH=`) to open the studio directly at `http://<host>:7861/`. |
+| `ASR_MODEL` | `openai/whisper-large-v3-turbo` | The Whisper model for speech-to-text. `openai/whisper-large-v3` can be slightly more accurate but is several times slower and needs about twice the GPU memory (roughly 3.5 GB). Keep it English-capable: the service always transcribes as English. |
+| `ASR_IDLE_UNLOAD` | `600` | Seconds without a transcription before the model frees its GPU memory. `0` keeps it loaded. |
+| `ASR_BATCH` | `8` | Pieces of audio transcribed at once. Lower it (4 or 2) if the GPU runs out of memory while Breeze is also running. |
+| `FLASH_ATTN_CUDA_ARCHS` | `120` | Build argument for Breeze: the GPU architecture FlashAttention is compiled for (120 Blackwell workstation/consumer, 90 H100, 89 RTX 40xx, 80 A100). Edit it in `docker-compose.yml` and rebuild. |
+
+The ports (7860 for Breeze, 7861 for the studio) are set in `docker-compose.yml`. The studio reaches Breeze
+and `asr` by their service names (`BREEZE_URL`, `ASR_URL`); change those only if you run the services
+somewhere else. When running `studio/app.py` or `asr/server.py` outside Docker, their other variables
+(`VOICES_DIR`, `SOURCES_DIR`, `STUDIO_PORT`, `ASR_PORT`, `HF_HOME`) are listed at the top of each file.
+
+**In the code**
+
+| Setting | Default | What it does / when to change it |
+|---|---|---|
+| `fast-reader.json` | prefill up to 512 tokens, text encoder up to 320 at cfg 1 | The prompt lengths Breeze prepares CUDA graphs for at start-up (see [Fast mode](#fast-mode)). A reference clip, its transcript and a paragraph must fit. Larger values use more GPU memory: 1024 ran out of memory on a 24 GB card. |
+| `SPAN_MAX` in `studio/app.py` | `600` | Characters per request when **Try text** reads like the reader. It matches the reader's `SPAN_MAX` for the server voice; change both together, and only within `fast-reader.json`'s limits. |
+| `CLIP_GOOD`, `CLIP_MAX`, `CLIP_MIN` in `studio/app.py` | `15`, `20`, `3` seconds | The clip lengths **From a long recording** calls good, refuses above and calls too short. Longer clips leave less of the prompt for paragraphs, so raise `CLIP_MAX` only together with `fast-reader.json`. |
+
 ## Files
 
 | File | What |

@@ -83,7 +83,8 @@ services:
     image: tts-asr
     environment:
       ASR_MODEL: ${ASR_MODEL:-openai/whisper-large-v3-turbo}
-      ASR_IDLE_UNLOAD: "600"
+      ASR_IDLE_UNLOAD: ${ASR_IDLE_UNLOAD:-600}
+      ASR_BATCH: ${ASR_BATCH:-8}
     volumes:
       # Downloaded models (about 1.6 GB for large-v3-turbo), kept between restarts.
       - ${ASR_MODELS_DIR:-./asr-models}:/models
