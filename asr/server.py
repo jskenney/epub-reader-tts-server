@@ -19,6 +19,8 @@ Environment:
   ASR_MODEL          Hugging Face model id (default openai/whisper-large-v3-turbo)
   ASR_IDLE_UNLOAD    seconds before unloading an unused model (default 600; 0 keeps it loaded)
   ASR_BATCH          pieces transcribed together (default 8 on the GPU, 1 on the CPU)
+  ASR_DEVICE         cuda, mps (an Apple Silicon Mac's GPU) or cpu (default: the first available)
+  ASR_HOST           the address to listen on (default 0.0.0.0; mac/start.sh uses 127.0.0.1)
   ASR_PORT           default 7862
   HF_HOME            where downloaded models are kept (mounted as a volume in docker-compose.yml)
 """
@@ -42,8 +44,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 MODEL = os.environ.get("ASR_MODEL", "openai/whisper-large-v3-turbo")
 IDLE = float(os.environ.get("ASR_IDLE_UNLOAD", "600"))
 PORT = int(os.environ.get("ASR_PORT", "7862"))
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH = int(os.environ.get("ASR_BATCH", "8" if DEVICE == "cuda" else "1"))
+HOST = os.environ.get("ASR_HOST", "0.0.0.0")
+DEVICE = os.environ.get("ASR_DEVICE") or (
+    "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+BATCH = int(os.environ.get("ASR_BATCH", "8" if DEVICE != "cpu" else "1"))
 SR = 16000
 ENGLISH_ONLY = MODEL.endswith(".en")  # these models take no language setting
 
@@ -57,7 +61,7 @@ def load():
         from transformers import pipeline
 
         state["pipe"] = pipeline("automatic-speech-recognition", model=MODEL, device=DEVICE,
-                                 torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32)
+                                 torch_dtype=torch.float16 if DEVICE != "cpu" else torch.float32)
     state["used"] = time.time()
     return state["pipe"]
 
@@ -73,6 +77,8 @@ def unload_when_idle():
                 gc.collect()
                 if DEVICE == "cuda":
                     torch.cuda.empty_cache()
+                elif DEVICE == "mps":
+                    torch.mps.empty_cache()
 
 
 def decode(path: str) -> np.ndarray:
@@ -256,4 +262,4 @@ def transcribe(file: UploadFile = File(...)):
 if __name__ == "__main__":
     threading.Thread(target=unload_when_idle, daemon=True).start()
     print(f"Speech-to-text: {MODEL} on {DEVICE}", flush=True)
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host=HOST, port=PORT)

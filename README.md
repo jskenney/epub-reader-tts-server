@@ -40,6 +40,8 @@ The reader shows **Server voice** when `/tts/health` answers and reads its voice
 
 ## Requirements
 
+(For a Mac, see [On a Mac](#on-a-mac-apple-silicon).)
+
 - Linux with an NVIDIA GPU with at least 12 GB of memory (24 GB recommended), a recent driver, and the
   NVIDIA Container Toolkit for Docker.
 - `docker-compose.yml` is set up for Blackwell workstation and consumer GPUs (RTX PRO 4000/6000 Blackwell,
@@ -65,6 +67,57 @@ site behind a password so nobody else can use your GPU.
 
 If you open the studio directly at `http://<host>:7861/` instead of through the proxy, set
 `STUDIO_ROOT_PATH=` (empty) before `docker compose up -d`.
+
+## On a Mac (Apple Silicon)
+
+Docker on a Mac can't use the GPU, so the `mac/` folder runs the same three services natively instead,
+with the same ports and API: the reader, the studio, the proxy examples and `make-voice.sh` work
+unchanged. Breeze runs on the GPU through Apple's MLX, using
+[Gust](https://github.com/Shoofio/gust-breeze-tts-2-mlx-server), Shoofio's real-time MLX port of the Breeze
+server (Apache-2.0), fetched at a pinned commit and patched (`mac/gust.patch`) to answer like the Linux
+server. Speech-to-text runs Whisper on the GPU through PyTorch (`mps`).
+
+**Not yet run on a Mac.** The patch passes Gust's own test suite (those that don't need the model), and the
+scripts were checked with stand-in tools on Linux, but nothing here has generated audio on a Mac yet.
+
+Needs macOS 14 or later, Apple Silicon with at least 16 GB of memory (Gust uses about 9 GB, Whisper about
+2 GB while transcribing), and [Homebrew](https://brew.sh):
+
+```bash
+brew install uv ffmpeg
+mac/setup.sh                 # fetches Gust, creates the Python environments, downloads the model (~7 GB)
+mac/start.sh                 # Breeze on 7860, the studio on 7861, speech-to-text on 127.0.0.1:7862
+curl http://localhost:7860/health
+curl http://localhost:7861/health
+```
+
+`mac/start.sh` runs in the foreground (Ctrl-C stops it) and logs to `mac/logs/`. To start it at login and
+restart it if it stops, as Docker's `restart: unless-stopped` does, run `mac/install-service.sh` (and
+`mac/install-service.sh --uninstall` to remove it). Settings go in `mac/settings.env`, one `NAME=value` per
+line: the folder and speech-to-text settings below, plus
+
+| Setting | Default | What |
+|---|---|---|
+| `TTS_BIND` | `0.0.0.0` | The address Breeze and the studio listen on. `127.0.0.1` if the web server runs on the same Mac. |
+| `TTS_CORS` | `*` | The browser origins Breeze accepts requests from: `*` (any), or your reader's site, e.g. `https://books.example.com`. |
+| `ASR_DEVICE` | `mps` | `cpu` if transcription fails on the GPU (much slower). |
+
+What's different from the Linux server:
+
+- **The weights** are Gust's real-time checkpoint (`Shoof/Gust-Breeze-TTS-2-MLX-Realtime`): Breeze TTS 2
+  converted to MLX, with the depth decoder in 8-bit. Same model and licence; Gust's README has its speed
+  (faster than real time on an M4 Pro) and listening comparisons. The same seed gives slightly different
+  audio than on Linux, so audio the reader saved from one is reused for the other if they share an address.
+- **No 512-token limit**: there are no CUDA graphs and no `fast-reader.json`. A prompt over the model's
+  2,048-token context is refused with a 400 before any audio, instead of failing partway.
+- **Errors** are `{"error": "...", "code": "..."}` rather than `{"detail": ...}`; the reader and the studio
+  read either. See [API.md](API.md#on-a-mac) for the rest.
+- **What the patch changes:** with no `instruction`, Gust used a default one ("Speak clearly and
+  naturally."), which turns cloning into directed speech. The patch makes no instruction mean plain speech
+  or plain cloning, as upstream Breeze does, and like upstream it then needs `cfg_scale` 1.
+- **Updating Gust:** change `GUST_COMMIT` in `mac/setup.sh`, refresh `mac/gust.patch` against it, and run
+  `mac/setup.sh` again. Gust's benchmark and model tests run against the patched copy in `mac/gust`
+  (`scripts/bench_mac.py`, `.venv/bin/pytest -m mlx` with `BREEZE_MLX_MODEL` set: see its README).
 
 ## The voice studio
 
@@ -220,6 +273,7 @@ somewhere else. When running `studio/app.py` or `asr/server.py` outside Docker, 
 | File | What |
 |---|---|
 | `API.md` | Every HTTP endpoint: the fields each request takes, the responses, headers and errors |
+| `mac/` | Running natively on an Apple Silicon Mac (see [On a Mac](#on-a-mac-apple-silicon)): `setup.sh`, `start.sh`, `install-service.sh`, and `gust.patch`, the changes to Gust |
 | `docker-compose.yml` | Builds Breeze TTS from upstream (pinned commit) for Blackwell GPUs and the voice studio |
 | `fast-reader.json` | Warmup profile sized for the reader's prompts (mounted over upstream's) |
 | `studio/` | The voice studio: `app.py` (Gradio 6.30), `Dockerfile`, `requirements.txt` |

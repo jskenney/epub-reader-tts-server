@@ -19,6 +19,7 @@ Environment:
   ASR_URL            the speech-to-text service (default http://asr:7862)
   STUDIO_ROOT_PATH   the path the studio is served at behind a proxy, for example /tts-studio
                      ("" when opened directly on its port)
+  STUDIO_HOST        the address to listen on (default 0.0.0.0)
   STUDIO_PORT        default 7861
 """
 
@@ -164,7 +165,8 @@ def breeze(text: str, cfg: float, seed: int, instruction: str | None = None,
                 continue
             if not r.ok:
                 try:
-                    detail = r.json().get("detail")
+                    body = r.json()  # {"detail"} from Breeze, {"error", "code"} from the Mac server
+                    detail = body.get("detail") or body.get("error")
                 except ValueError:
                     detail = r.text[:300]
                 raise gr.Error(f"Breeze answered {r.status_code}: {detail}")
@@ -901,4 +903,5 @@ def health():
 app = gr.mount_gradio_app(app, studio, path="/", root_path=ROOT_PATH or None, allowed_paths=[str(VOICES), str(WORK)])
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT, proxy_headers=True, forwarded_allow_ips="*")
+    uvicorn.run(app, host=os.environ.get("STUDIO_HOST", "0.0.0.0"), port=PORT, proxy_headers=True,
+                forwarded_allow_ips="*")

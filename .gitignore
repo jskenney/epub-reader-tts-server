@@ -5,3 +5,9 @@ tts-voices/
 tts-sources/
 asr-models/
 *.pcm
+# The Mac setup (mac/setup.sh): Gust's checkout, the Python environments, logs and local settings
+mac/gust/
+mac/.venv/
+mac/logs/
+mac/settings.env
+__pycache__/

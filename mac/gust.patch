@@ -1,0 +1,303 @@
+diff --git a/breeze_infer/http_fields.py b/breeze_infer/http_fields.py
+index a562a12..21f1b00 100644
+--- a/breeze_infer/http_fields.py
++++ b/breeze_infer/http_fields.py
+@@ -1079,7 +1079,7 @@ class SpeechRequest:
+     validated. Produced by `parse_speech`; nothing downstream re-checks these fields."""
+ 
+     text: str
+-    instruction: str
++    instruction: str | None
+     reference: ReferenceSpec
+     cfg_scale: float
+     seed: int
+@@ -1128,7 +1128,11 @@ def parse_speech(fields: Fields, settings: Settings) -> SpeechRequest:
+     if instruction_raw is not None:
+         _check_no_control_characters(instruction_raw, "instruction")  # BC-46
+     if instruction_raw is None or not instruction_raw.strip():
+-        instruction = DEFAULT_INSTRUCTION
++        # epub-reader-tts-server: as upstream Breeze's API, no instruction means plain speech
++        # (tts_plain) or plain cloning (ref_clone_tata), not the default instruction. A saved
++        # voice (voice_id, this server's own feature) keeps the default: its cached prefix is
++        # built for the instruction templates.
++        instruction = DEFAULT_INSTRUCTION if _first(fields, "voice_id") is not None else None
+     else:
+         if len(instruction_raw) > MAX_INSTRUCTION_CHARS:
+             raise ApiError(
+@@ -1152,6 +1156,11 @@ def parse_speech(fields: Fields, settings: Settings) -> SpeechRequest:
+             rule="finite and between 0 and 100",
+         )
+ 
++    if instruction is None and cfg_scale != 1.0:
++        # epub-reader-tts-server: the templates without an instruction have no negative prompt
++        # to guide against (upstream Breeze fails on this too).
++        raise ApiError(400, "invalid_field", "cfg_scale must be 1 without an instruction")
++
+     seed_raw = _first(fields, "seed")
+     if seed_raw is None:
+         seed = DEFAULT_SEED
+diff --git a/breeze_infer/synthesis.py b/breeze_infer/synthesis.py
+index f448ff2..b42e499 100644
+--- a/breeze_infer/synthesis.py
++++ b/breeze_infer/synthesis.py
+@@ -282,7 +282,7 @@ def prepare_piece(
+     model: Any,
+     reference: Reference,
+     text: str,
+-    instruction: str,
++    instruction: str | None,
+     cfg_scale: float,
+ ) -> dict[str, Any]:
+     """Build one piece's model inputs (sync; runs on the GPU thread).
+@@ -300,15 +300,17 @@ def prepare_piece(
+     A ``PrefixRef`` piece is only the text that follows the cached prefix
+     (`prepare_suffix_inputs`); the runtime continues the prefix with it (``prefix=``).
+     """
+-    request: dict[str, Any] = {"text": text, "instruction": instruction}
++    request: dict[str, Any] = {"text": text}
++    if instruction is not None:
++        request["instruction"] = instruction
+     if isinstance(reference, PrefixRef):
+         return prepare_suffix_inputs(tokenizer, model, request, guidance_scale=cfg_scale)
+     if isinstance(reference, CodesRef):
+         request["ref_text"] = reference.ref_text
+         request["ref_audio_codes"] = reference.codes
+-        template = get_template("ref_edit_tata")
++        template = get_template("ref_edit_tata" if instruction is not None else "ref_clone_tata")
+     elif isinstance(reference, NoRef):
+-        template = get_template("tts_instruction")
++        template = get_template("tts_instruction" if instruction is not None else "tts_plain")
+     else:
+         raise TypeError(f"unknown reference: {reference!r}")
+ 
+@@ -363,7 +365,7 @@ def predicted_room(
+     tokenizer: Any,
+     reference: Reference | UnbuiltPrefix,
+     text: str,
+-    instruction: str,
++    instruction: str | None,
+     cfg_scale: float,
+     requested: int | None,
+ ) -> PieceRoom:
+@@ -427,7 +429,7 @@ def anchor_sizing(
+     tokenizer: Any,
+     anchor_text: str,
+     later_texts: list[str],
+-    instruction: str,
++    instruction: str | None,
+     cfg_scale: float,
+ ) -> AnchorSizing:
+     """Measure what `AnchorSizing` holds, from prompts built on the CPU and then dropped.
+diff --git a/breeze_infer/templates.py b/breeze_infer/templates.py
+index ae0d588..e3dbcdb 100644
+--- a/breeze_infer/templates.py
++++ b/breeze_infer/templates.py
+@@ -116,6 +116,20 @@ def _ref_edit_tata_dual_branches(request: Request) -> dict[str, list[Segment]]:
+ 
+ 
+ TEMPLATES: dict[str, TemplateSpec] = {
++    # epub-reader-tts-server: upstream Breeze's two templates without an instruction, used when a
++    # request sends none (as upstream's API does). Like upstream, they have no negative prompt, so
++    # they take cfg_scale 1 only (http_fields.parse_speech refuses anything else).
++    "tts_plain": TemplateSpec(
++        name="tts_plain",
++        required_fields=("text",),
++        build_segments=_tts_plain_segments,
++    ),
++    "ref_clone_tata": TemplateSpec(
++        name="ref_clone_tata",
++        required_fields=("text", "ref_text"),
++        build_segments=_ref_clone_tata_segments,
++        reference_audio=True,
++    ),
+     "tts_instruction": TemplateSpec(
+         name="tts_instruction",
+         required_fields=("text", "instruction"),
+diff --git a/tests/test_http_fields.py b/tests/test_http_fields.py
+index a775df8..e7f08c4 100644
+--- a/tests/test_http_fields.py
++++ b/tests/test_http_fields.py
+@@ -117,7 +117,7 @@ def test_defaults_with_only_text_given(tmp_path: Path) -> None:
+     body = response.json()
+     assert body == {
+         "text": "hello there",
+-        "instruction": DEFAULT_INSTRUCTION,
++        "instruction": None,  # epub-reader-tts-server: no instruction, as upstream Breeze
+         "reference": {"kind": "none"},
+         "cfg_scale": DEFAULT_CFG_SCALE,
+         "seed": DEFAULT_SEED,
+@@ -178,7 +178,7 @@ def test_parses_valid_values_from_the_query_string(tmp_path: Path) -> None:
+ def test_fields_may_be_split_across_body_and_query(tmp_path: Path) -> None:
+     """Nothing in T037 forbids mixing sources for *different* fields (T048 adds the
+     duplicate-field check for the *same* field appearing in both)."""
+-    body = {"text": "hello there", "seed": "7"}
++    body = {"text": "hello there", "seed": "7", "instruction": "Calm."}  # (cfg needs one)
+     query = {"cfg_scale": "3.0"}
+ 
+     response = _client(tmp_path).post("/speech", data=body, params=query)
+@@ -210,7 +210,7 @@ def test_blank_instruction_uses_the_default(tmp_path: Path, blank: str) -> None:
+     response = _client(tmp_path).post("/speech", data={"text": "hi", "instruction": blank})
+ 
+     assert response.status_code == 200
+-    assert response.json()["instruction"] == DEFAULT_INSTRUCTION
++    assert response.json()["instruction"] is None  # epub-reader-tts-server: none, as upstream
+ 
+ 
+ def test_non_blank_instruction_is_kept_exactly(tmp_path: Path) -> None:
+@@ -940,7 +940,7 @@ def test_bc_02_empty_value_is_absent(tmp_path: Path) -> None:
+ 
+     assert response.status_code == 200
+     body = response.json()
+-    assert body["instruction"] == DEFAULT_INSTRUCTION
++    assert body["instruction"] is None  # epub-reader-tts-server: as upstream Breeze
+     assert body["cfg_scale"] == DEFAULT_CFG_SCALE
+     assert body["seed"] == DEFAULT_SEED
+     assert body["temperature"] is None
+@@ -1075,7 +1075,7 @@ def test_bc_09_blank_instruction_uses_default(tmp_path: Path, blank: str) -> Non
+     )
+ 
+     assert response.status_code == 200
+-    assert response.json()["instruction"] == DEFAULT_INSTRUCTION
++    assert response.json()["instruction"] is None  # epub-reader-tts-server: none, as upstream
+ 
+ 
+ @pytest.mark.parametrize("blank", ["   ", "\t\t", "\n\n", " \t\n "])
+@@ -1500,7 +1500,9 @@ def test_cfg_scale_unrepresentable_zero_is_accepted(tmp_path: Path, literal: str
+     """A zero mantissa with an exponent `Decimal` can't represent is still exactly zero --
+     in range for `cfg_scale` (`[0, 100]`) -- regardless of which direction the unrepresentable
+     exponent points."""
+-    response = _client(tmp_path).post("/speech", data={"text": "hi", "cfg_scale": literal})
++    response = _client(tmp_path).post(
++        "/speech", data={"text": "hi", "instruction": "Calm.", "cfg_scale": literal}
++    )
+ 
+     assert response.status_code == 200
+     assert response.json()["cfg_scale"] == 0.0
+@@ -1515,7 +1517,8 @@ def test_cfg_scale_tiny_value_with_unrepresentable_exponent_is_accepted(
+     (`test_underflowing_nonzero_literal_is_400_not_default`), which is a different field's
+     range rule (temperature's `(0, 10]` excludes 0), not a different code path."""
+     response = _client(tmp_path).post(
+-        "/speech", data={"text": "hi", "cfg_scale": "1e-999999999999999999999"}
++        "/speech",
++        data={"text": "hi", "instruction": "Calm.", "cfg_scale": "1e-999999999999999999999"},
+     )
+ 
+     assert response.status_code == 200
+@@ -1608,7 +1611,7 @@ def test_decimal_exponent_of_5000_leading_zero_digits_then_one_is_accepted(
+     is exactly `1e1`, not an unrepresentable magnitude, and must resolve to that value, not
+     be clamped as if it were huge."""
+     response = _client(tmp_path).post(
+-        "/speech", data={"text": "hi", "cfg_scale": "1e" + "0" * 4998 + "1"}
++        "/speech", data={"text": "hi", "instruction": "Calm.", "cfg_scale": "1e" + "0" * 4998 + "1"}
+     )
+ 
+     assert response.status_code == 200
+@@ -2075,7 +2078,7 @@ def test_instruction_blank_check_runs_before_the_length_check(tmp_path: Path) ->
+     )
+ 
+     assert response.status_code == 200
+-    assert response.json()["instruction"] == DEFAULT_INSTRUCTION
++    assert response.json()["instruction"] is None  # epub-reader-tts-server: none, as upstream
+ 
+ 
+ def test_ref_text_blank_check_runs_before_the_length_check(tmp_path: Path) -> None:
+@@ -2231,3 +2234,32 @@ def test_voice_id_names_are_checked_by_voice_file_is_valid_name(monkeypatch) ->
+     assert http_fields.is_valid_voice_id("only-this") is True
+     assert http_fields.is_valid_voice_id("alice") is False
+     assert http_fields.is_valid_voice_id("v_0123456789abcdef") is True
++
++
++# --- epub-reader-tts-server: no instruction, as upstream Breeze -----------------------------
++
++
++def test_voice_id_without_instruction_keeps_the_default(tmp_path: Path) -> None:
++    """A saved voice's cached prefix is built for the instruction templates."""
++    response = _client(tmp_path).post("/speech", data={"text": "hi", "voice_id": "alice"})
++
++    assert response.status_code == 200
++    assert response.json()["instruction"] == DEFAULT_INSTRUCTION
++
++
++@pytest.mark.parametrize("cfg", ["2", "0", "1.5"])
++def test_cfg_scale_other_than_1_needs_an_instruction(tmp_path: Path, cfg: str) -> None:
++    response = _client(tmp_path).post("/speech", data={"text": "hi", "cfg_scale": cfg})
++
++    assert response.status_code == 400
++    assert response.json() == {
++        "error": "cfg_scale must be 1 without an instruction",
++        "code": "invalid_field",
++    }
++
++
++def test_cfg_scale_1_without_an_instruction_is_accepted(tmp_path: Path) -> None:
++    response = _client(tmp_path).post("/speech", data={"text": "hi", "cfg_scale": "1.0"})
++
++    assert response.status_code == 200
++    assert response.json()["instruction"] is None
+diff --git a/tests/test_synthesis.py b/tests/test_synthesis.py
+index 4ba28ce..1beba5b 100644
+--- a/tests/test_synthesis.py
++++ b/tests/test_synthesis.py
+@@ -786,3 +786,62 @@ def test_43_1_an_out_of_memory_while_assembling_the_inputs_raises_the_marker(
+     assert caught.value.__cause__ is None and caught.value.__context__ is None
+     assert emptied == [True]
+     assert runtime.prefix_builds == []
++
++
++# --- epub-reader-tts-server: no instruction, as upstream Breeze --------------------------------
++
++
++def _templates_used(monkeypatch: pytest.MonkeyPatch) -> list[str]:
++    from breeze_infer import synthesis
++
++    used: list[str] = []
++    real = synthesis.get_template
++
++    def recording(name: str) -> Any:
++        used.append(name)
++        return real(name)
++
++    monkeypatch.setattr(synthesis, "get_template", recording)
++    return used
++
++
++def test_prepare_piece_without_instruction_uses_upstreams_plain_templates(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    used = _templates_used(monkeypatch)
++    codes = torch.zeros((7, 16), dtype=torch.int16)
++    model = model_with_codec_facts()
++
++    plain = prepare_piece(FakeTokenizer(), model, NoRef(), "hello", None, 1.0)
++    clone = prepare_piece(
++        FakeTokenizer(), model, CodesRef(codes=codes, ref_text="the ref"), "hello", None, 1.0
++    )
++    prepare_piece(FakeTokenizer(), model, NoRef(), "hello", "calm voice", 1.0)
++    prepare_piece(
++        FakeTokenizer(), model, CodesRef(codes=codes, ref_text="the ref"), "hello", "calm", 1.0
++    )
++
++    assert used == ["tts_plain", "ref_clone_tata", "tts_instruction", "ref_edit_tata"]
++    assert plain.get("input_values") is None
++    assert clone["input_values"] is not None
++    assert "cfg_negative_prompt_ids" not in plain and "cfg_negative_prompt_ids" not in clone
++
++
++def test_room_and_anchor_sizing_work_without_an_instruction() -> None:
++    runtime = FakeRuntime()
++    runtime.model = model_with_codec_facts()
++    codes = torch.zeros((7, 16), dtype=torch.int16)
++    for reference in (NoRef(), CodesRef(codes=codes, ref_text="a reference transcript")):
++        real = prepare_piece(FakeTokenizer(), runtime.model, reference, "Hello there.", None, 1.0)
++        predicted = predicted_room(
++            runtime, FakeTokenizer(), reference, "Hello there.", None, 1.0, None
++        )
++        assert predicted == piece_room(runtime, real, None)
++
++    sizing = anchor_sizing(runtime, FakeTokenizer(), ANCHOR_TEXT, LATER_TEXTS, None, 1.0)
++    for frames in (1, 7):
++        anchor = CodesRef(codes=torch.zeros((frames, 16), dtype=torch.int16), ref_text=ANCHOR_TEXT)
++        for text, length in zip(LATER_TEXTS, sizing.later_lengths, strict=True):
++            assert sizing.anchored(length, frames) == prompt_length(
++                prepare_piece(FakeTokenizer(), runtime.model, anchor, text, None, 1.0)
++            )

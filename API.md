@@ -17,6 +17,9 @@ others off your GPU. All are FastAPI apps, so `breeze-tts` and `asr` also serve 
 
 Times are in seconds. Audio sizes assume Breeze's 24 kHz, 16-bit mono output (48,000 bytes per second).
 
+On an Apple Silicon Mac, `mac/` serves the same API without Docker, with a few differences on port 7860: see
+[On a Mac](#on-a-mac).
+
 ---
 
 ## Breeze TTS API (`breeze-tts`, port 7860)
@@ -417,6 +420,26 @@ docker compose exec asr sh -c 'curl -sS -N -F "file=@/tmp/chapter.m4b" localhost
 ```
 
 ---
+
+## On a Mac
+
+`mac/` in this repository runs [Gust](https://github.com/Shoofio/gust-breeze-tts-2-mlx-server) (Breeze on
+Apple's MLX) in place of the `breeze-tts` container, patched to answer like it. The studio and speech-to-text
+are the same code. What the reader and the studio use behaves as above, with these differences on port 7860:
+
+| | Linux (`breeze-tts`) | Mac (Gust, patched) |
+|---|---|---|
+| `GET /health` | `{"status": "ok", "sample_rate": 24000}` | The same plus `"ws_port": 0`. While loading: 503 `{"status": "loading", "error": "model is loading", "code": "loading"}`. |
+| `POST /v1/audio/speech` fields | as above | The same, plus Gust's own: `voice_id`, `temperature`, `top_k`, `top_p`, `repetition_penalty`, `max_new_tokens`, `split_chars` (its [docs/api.md](https://github.com/Shoofio/gust-breeze-tts-2-mlx-server/blob/main/docs/api.md)). `text` up to 10,000 characters; `ref_audio` WAV, FLAC or OGG of 80 ms to 30 s. |
+| No `instruction` | Plain speech or cloning; `cfg_scale` must be 1 (other values fail) | The same (the patch); other `cfg_scale` values get 400 `cfg_scale must be 1 without an instruction` |
+| Long text | Fails partway past `fast-reader.json`'s prompt lengths | Split at about 600 characters (`split_chars`); refused with 400 `text_too_long` if the first piece doesn't fit the 2,048-token context |
+| Error body | `{"detail": "..."}` (422 for a missing or mistyped field, with a list) | `{"error": "...", "code": "..."}` for every error; a missing or mistyped field is a 400 (`text_required`, `invalid_field`, …) |
+| Busy | 409 `{"detail": "An inference request is already running."}` | 409 `{"error": "busy", "code": "busy"}` |
+| Failure after the audio starts | The stream ends early | The connection closes without the end of the chunked response |
+| Response headers | as above | The same, plus `X-Breeze-Version`, and CORS headers for allowed origins (`TTS_CORS`) |
+| A browser `POST` from another site | Answered | 403 `origin_not_allowed` unless the origin is in `TTS_CORS` (default `*`, all) |
+| `GET /v1/model`, `POST /v1/audio/speech/batch` | as above | Not available (404) |
+| Extra routes | | `GET /v1/audio/speech.wav`, `/v1/voices` (Gust's saved voices, separate from `voices.json`); its WebSocket API is turned off |
 
 ## How the reader uses the API
 
