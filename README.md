@@ -181,6 +181,8 @@ with pauses between paragraphs.
 - Speed is applied at playback with pitch preserved. The highlighted word is estimated, as with the other
   natural voices.
 
+The requests and responses in full, for writing another client: [API.md](API.md).
+
 ## Settings
 
 Everything below has a working default. Set the `docker-compose.yml` values in a `.env` file next to it
@@ -217,6 +219,7 @@ somewhere else. When running `studio/app.py` or `asr/server.py` outside Docker, 
 
 | File | What |
 |---|---|
+| `API.md` | Every HTTP endpoint: the fields each request takes, the responses, headers and errors |
 | `docker-compose.yml` | Builds Breeze TTS from upstream (pinned commit) for Blackwell GPUs and the voice studio |
 | `fast-reader.json` | Warmup profile sized for the reader's prompts (mounted over upstream's) |
 | `studio/` | The voice studio: `app.py` (Gradio 6.30), `Dockerfile`, `requirements.txt` |

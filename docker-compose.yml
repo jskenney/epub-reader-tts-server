@@ -30,7 +30,7 @@ services:
       - "7860:7860"
     volumes:
       - ${BREEZE_MODEL_DIR:-./models/Breeze-TTS-2}:/models/breeze:ro
-      # Warmup profile with prompt lengths up to 1024 tokens (prefill) and 512 (text encoder) at cfg 1.
+      # Warmup profile with prompt lengths up to 512 tokens (prefill) and 320 (text encoder) at cfg 1.
       - ./fast-reader.json:/opt/breeze-infer/configs/fast.json:ro
     ipc: host
     restart: unless-stopped
